@@ -1,0 +1,66 @@
+name: Build & Deploy to AWS
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        service: [front, back]
+
+    steps:
+      # 1) 코드 체크아웃
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      # 2) AWS 자격증명 설정
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ secrets.AWS_REGION }}
+
+      # 3) ECR 로그인
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v1
+
+      # 4) Docker 이미지 빌드 & 푸시
+      - name: Build & push Docker image for ${{ matrix.service }}
+        run: |
+          # 해당 서비스 디렉토리로 이동
+          cd ${{ matrix.service }}
+
+          # ECR 리포지토리 이름 선택
+          if [[ "${{ matrix.service }}" == "front" ]]; then
+            REPO_NAME=${{ secrets.ECR_FRONT_REPO }}
+          else
+            REPO_NAME=${{ secrets.ECR_BACK_REPO }}
+          fi
+
+          # 전체 이미지 URI 구성
+          IMAGE_URI=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/${REPO_NAME}:latest
+
+          # 빌드 및 푸시
+          docker build -t $IMAGE_URI .
+          docker push $IMAGE_URI
+
+      # 5) ECS 서비스에 새 배포 트리거
+      - name: Deploy ${{ matrix.service }} to ECS
+        run: |
+          CLUSTER=${{ secrets.ECS_CLUSTER }}
+          if [[ "${{ matrix.service }}" == "front" ]]; then
+            SERVICE=${{ secrets.ECS_SERVICE_FRONT }}
+          else
+            SERVICE=${{ secrets.ECS_SERVICE_BACK }}
+          fi
+
+          aws ecs update-service \
+            --cluster $CLUSTER \
+            --service $SERVICE \
+            --force-new-deployment
